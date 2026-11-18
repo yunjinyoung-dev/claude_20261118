@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>우리집 가계부</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%232f6fdf'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif' font-weight='700'%3E%E2%82%A9%3C/text%3E%3C/svg%3E">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">₩</span>
+      <h1>우리집 가계부</h1>
+    </div>
+    <nav class="month-nav" aria-label="월 이동">
+      <button type="button" class="icon-btn" id="prevMonth" aria-label="이전 달">‹</button>
+      <label class="month-label">
+        <span id="monthText"></span>
+        <input type="month" id="monthPicker" aria-label="월 선택">
+      </label>
+      <button type="button" class="icon-btn" id="nextMonth" aria-label="다음 달">›</button>
+      <button type="button" class="btn small ghost" id="thisMonth">이번 달</button>
+    </nav>
+    <div class="actions">
+      <button type="button" class="btn" id="btnImport">엑셀 가져오기</button>
+      <input type="file" id="fileInput" accept=".xlsx,.csv,.txt" hidden>
+      <button type="button" class="btn primary" id="btnExport">엑셀 내보내기</button>
+      <button type="button" class="btn ghost" id="btnCsv" title="CSV로 내보내기">CSV</button>
+      <button type="button" class="icon-btn" id="btnSettings" aria-label="설정" title="설정">⚙</button>
+    </div>
+  </header>
+
+  <main>
+    <section class="cards" id="cards" aria-label="이번 달 요약"></section>
+
+    <section class="panel entry" aria-label="내역 입력">
+      <form id="entryForm" autocomplete="off">
+        <div class="seg" role="radiogroup" aria-label="구분">
+          <button type="button" data-type="지출" class="seg-btn on" role="radio" aria-checked="true">지출</button>
+          <button type="button" data-type="수입" class="seg-btn" role="radio" aria-checked="false">수입</button>
+        </div>
+        <label class="f f-date"><span>날짜</span><input type="date" id="fDate" required></label>
+        <label class="f f-cat"><span>분류</span><select id="fCat"></select></label>
+        <label class="f f-desc"><span>내용</span><input type="text" id="fDesc" list="descList" placeholder="예: 마트 장보기"></label>
+        <label class="f f-amt">
+          <span>금액 <em class="hint" id="amtPreview"></em></span>
+          <input type="text" id="fAmount" inputmode="decimal" placeholder="12000 또는 =4500*3" required>
+        </label>
+        <label class="f f-method"><span>결제수단</span><select id="fMethod"></select></label>
+        <label class="f f-memo"><span>메모</span><input type="text" id="fMemo" placeholder="선택"></label>
+        <div class="f-actions">
+          <button type="submit" class="btn primary" id="btnSubmit">추가</button>
+          <button type="button" class="btn ghost" id="btnCancelEdit" hidden>취소</button>
+        </div>
+        <datalist id="descList"></datalist>
+      </form>
+    </section>
+
+    <div class="layout">
+      <section class="panel" aria-label="거래내역">
+        <div class="panel-head">
+          <h2>거래내역 <small class="muted" id="txCount"></small></h2>
+          <div class="tools">
+            <input type="search" id="search" placeholder="검색 (내용·분류·메모)">
+            <label class="check"><input type="checkbox" id="showAll"> 전체 기간</label>
+          </div>
+        </div>
+        <p class="sheet-hint">표 머리의 <b>A–G</b> 열 이름과 왼쪽 <b>행 번호</b>는 엑셀로 내보낸 <b>거래내역</b> 시트와 같습니다. 수식에서 그대로 쓰세요.</p>
+        <div class="table-wrap">
+          <table class="tx" id="txTable">
+            <thead>
+              <tr>
+                <th class="rn">#</th>
+                <th><i>A</i>날짜</th><th class="opt-m"><i>B</i>구분</th><th><i>C</i>분류</th><th><i>D</i>내용</th>
+                <th class="num"><i>E</i>금액</th><th class="opt"><i>F</i>결제수단</th><th class="opt"><i>G</i>메모</th>
+                <th class="act"><span class="sr">관리</span></th>
+              </tr>
+            </thead>
+            <tbody id="txBody"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="emptyState" hidden>
+          <p>아직 내역이 없어요.</p>
+          <button type="button" class="btn" id="btnSample">예시 데이터로 둘러보기</button>
+        </div>
+      </section>
+
+      <aside class="side">
+        <section class="panel" aria-label="분류별 지출">
+          <div class="panel-head"><h2>분류별 지출</h2><small class="muted" id="catPeriod"></small></div>
+          <div id="catBars" class="bars"></div>
+        </section>
+
+        <section class="panel formula" aria-label="수식 계산">
+          <div class="panel-head"><h2>수식 계산 <small class="muted">엑셀 함수 호환</small></h2></div>
+          <div class="fx-bar">
+            <span class="fx">fx</span>
+            <input type="text" id="fxInput" spellcheck="false" placeholder='=SUMIFS(E:E,B:B,"지출",C:C,"식비")'>
+          </div>
+          <div class="fx-result" id="fxResult" aria-live="polite"></div>
+          <div class="fx-save">
+            <input type="text" id="fxName" placeholder="이름 (예: 이번 달 식비)">
+            <button type="button" class="btn small primary" id="fxSave">저장</button>
+          </div>
+          <div class="chips" id="fxExamples"></div>
+          <ul class="saved" id="fxSaved"></ul>
+          <details class="ref">
+            <summary>지원 함수 목록</summary>
+            <p class="muted small">거래내역 시트 기준 — A 날짜, B 구분, C 분류, D 내용, E 금액, F 결제수단, G 메모 (1행 머리글).
+              조건에는 <code>"식비"</code>, <code>"&gt;=10000"</code>, <code>"카*"</code>, <code>"&gt;="&amp;DATE(2026,1,1)</code> 처럼 엑셀과 같은 방식을 씁니다. 함수를 누르면 입력됩니다.</p>
+            <dl id="fnList"></dl>
+          </details>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <dialog id="settingsDlg">
+    <form method="dialog" id="settingsForm">
+      <h2>설정</h2>
+      <label class="f"><span>월 예산 (지출, 원) — 0이면 사용 안 함</span><input type="text" inputmode="numeric" id="sBudget"></label>
+      <div class="grid3">
+        <label class="f"><span>지출 분류 (한 줄에 하나)</span><textarea id="sExpense" rows="9"></textarea></label>
+        <label class="f"><span>수입 분류</span><textarea id="sIncome" rows="9"></textarea></label>
+        <label class="f"><span>결제수단</span><textarea id="sMethods" rows="9"></textarea></label>
+      </div>
+      <p class="muted small">데이터는 이 브라우저에만 저장됩니다. 다른 기기로 옮기거나 백업할 때는 <b>엑셀 내보내기</b> 파일을 가져오면 됩니다.</p>
+      <div class="dlg-actions">
+        <button type="button" class="btn danger ghost" id="btnReset">모든 데이터 삭제</button>
+        <span class="spacer"></span>
+        <button value="cancel" class="btn ghost" formnovalidate>닫기</button>
+        <button value="save" class="btn primary" id="btnSaveSettings">저장</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="choiceDlg">
+    <form method="dialog">
+      <h2 id="choiceTitle"></h2>
+      <p id="choiceText"></p>
+      <div class="dlg-actions" id="choiceActions"></div>
+    </form>
+  </dialog>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/formula.js"></script>
+  <script src="js/xlsx.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
