@@ -13,6 +13,7 @@
     <div class="brand">
       <span class="logo" aria-hidden="true">₩</span>
       <h1>우리집 가계부</h1>
+      <span class="status" id="saveStatus"></span>
     </div>
     <nav class="month-nav" aria-label="월 이동">
       <button type="button" class="icon-btn" id="prevMonth" aria-label="이전 달">‹</button>
@@ -126,7 +127,7 @@
         <label class="f"><span>수입 분류</span><textarea id="sIncome" rows="9"></textarea></label>
         <label class="f"><span>결제수단</span><textarea id="sMethods" rows="9"></textarea></label>
       </div>
-      <p class="muted small">데이터는 이 브라우저에만 저장됩니다. 다른 기기로 옮기거나 백업할 때는 <b>엑셀 내보내기</b> 파일을 가져오면 됩니다.</p>
+      <p class="muted small">claude.ai 링크로 열면 내 계정에 비공개로 저장되어 다른 기기에서도 이어서 쓸 수 있어요. 파일로 직접 열면 이 브라우저에만 저장됩니다. 백업은 <b>엑셀 내보내기</b>로 해 두세요.</p>
       <div class="dlg-actions">
         <button type="button" class="btn danger ghost" id="btnReset">모든 데이터 삭제</button>
         <span class="spacer"></span>

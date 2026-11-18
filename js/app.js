@@ -27,24 +27,135 @@
   const shiftYm = (ym, k) => { const [y, m] = ymParts(ym); const d = new Date(y, m - 1 + k, 1); return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; };
   const ymLabel = (ym) => { const [y, m] = ymParts(ym); return `${y}년 ${m}월`; };
 
-  /* ---------- 저장 ---------- */
+  /* ---------- 저장 ----------
+   * claude.ai 아티팩트에서 열면: 계정별 비공개 저장소(db)에 월별 문서로 저장 → 여러 기기에서 동기화
+   * 그 밖의 환경(파일로 열기 등): 이 브라우저의 localStorage 에 저장 */
   function validTx(t) { return t && /^\d{4}-\d{2}-\d{2}$/.test(t.date) && (t.type === '수입' || t.type === '지출') && typeof t.amount === 'number' && isFinite(t.amount); }
-  function load() {
-    let d = {};
-    try { d = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { d = {}; }
-    const s = Object.assign({}, DEFAULTS, d.settings || {});
-    return {
+  function normalize(d) {
+    d = d || {};
+    const st = {
       tx: Array.isArray(d.tx) ? d.tx.filter(validTx) : [],
       formulas: Array.isArray(d.formulas) ? d.formulas.filter((f) => f && typeof f.f === 'string') : [],
-      settings: s,
+      settings: Object.assign({}, DEFAULTS, d.settings || {}),
       seq: Number(d.seq) || 1,
     };
+    st.seq = Math.max(st.seq, ...st.tx.map((t) => t.id + 1), ...st.formulas.map((f) => f.id + 1), 1);
+    return st;
   }
-  let state = load();
-  state.seq = Math.max(state.seq, ...state.tx.map((t) => t.id + 1), ...state.formulas.map((f) => f.id + 1), 1);
-  const nextId = () => state.seq++;
-  function save() {
+  function loadLocal() {
+    try { return normalize(JSON.parse(localStorage.getItem(KEY))); } catch (e) { return normalize({}); }
+  }
+  function saveLocal() {
     try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) { toast('저장하지 못했어요. 브라우저 저장공간을 확인해 주세요.'); }
+  }
+
+  // mode: 'pending'(연결 확인 중) | 'cloud' | 'local'
+  const store = { mode: 'local', ready: true, db: null, col: null, synced: {}, flushing: false, dirty: false, timer: null, unsub: null, readOnly: false };
+  const hasClaude = typeof window.claude === 'object' && window.claude && typeof window.claude.use === 'function';
+  let state = hasClaude ? normalize({}) : loadLocal();
+  if (hasClaude) { store.mode = 'pending'; store.ready = false; }
+  const nextId = () => state.seq++;
+
+  function setStatus(text, kind) {
+    const el = $('saveStatus');
+    if (!el) return;
+    el.textContent = text;
+    el.className = 'status ' + (kind || '');
+  }
+  function toDocs(st) {
+    const docs = { meta: { settings: st.settings, formulas: st.formulas, seq: st.seq, v: 1 } };
+    for (const t of st.tx) {
+      const id = 'm-' + t.date.slice(0, 7);
+      (docs[id] = docs[id] || { tx: [] }).tx.push(t);
+    }
+    return docs;
+  }
+  function fromDocs(docs) {
+    const meta = docs.meta || {};
+    const tx = [];
+    Object.keys(docs).filter((k) => k.startsWith('m-')).forEach((k) => { if (Array.isArray(docs[k].tx)) tx.push(...docs[k].tx); });
+    return normalize({ tx, formulas: meta.formulas, settings: meta.settings, seq: meta.seq });
+  }
+  function save() {
+    if (store.mode === 'local') { saveLocal(); return; }
+    if (store.mode !== 'cloud' || store.readOnly) return;
+    store.dirty = true;
+    setStatus('저장 중…', 'busy');
+    clearTimeout(store.timer);
+    store.timer = setTimeout(flush, 250);
+  }
+  async function flush() {
+    if (store.flushing) return;
+    store.flushing = true;
+    try {
+      while (store.dirty) {
+        store.dirty = false;
+        const docs = toDocs(state);
+        const ids = new Set([...Object.keys(docs), ...Object.keys(store.synced)]);
+        for (const id of ids) {
+          const body = docs[id];
+          const json = body ? JSON.stringify(body) : null;
+          if (json === (store.synced[id] ?? null)) continue;
+          if (body) await store.col.doc(id).set(body); else await store.col.doc(id).delete();
+          if (json === null) delete store.synced[id]; else store.synced[id] = json;
+        }
+      }
+      setStatus('계정에 저장됨', 'ok');
+    } catch (e) {
+      console.error(e);
+      if (e && e.code === 'invalid_argument') { store.readOnly = true; setStatus('보기 전용', 'warn'); toast('이 가계부에 저장할 권한이 없어요. 소유자에게 편집 권한을 받아 주세요.'); }
+      else if (e && e.code === 'quota_exceeded') { setStatus('저장 공간 부족', 'warn'); toast('저장 공간이 가득 찼어요. 오래된 내역을 엑셀로 내보낸 뒤 지워 주세요.'); }
+      else { setStatus('저장 실패 · 다시 시도', 'warn'); store.dirty = true; setTimeout(flush, 3000 + Math.random() * 2000); }
+    } finally {
+      store.flushing = false;
+    }
+  }
+  function goLocal(reason) {
+    if (store.unsub) { store.unsub(); store.unsub = null; }
+    store.mode = 'local'; store.ready = true;
+    state = loadLocal();
+    cache = null;
+    setStatus('이 브라우저에만 저장', 'warn');
+    if (reason) toast(reason);
+    if (typeof render === 'function' && booted) { setType(view.type); fillSelect($('fMethod'), state.settings.methods); render(); }
+  }
+  async function connectCloud() {
+    let db = null, user = null;
+    try { [db, user] = await Promise.all([window.claude.use('db'), window.claude.use('user')]); } catch (e) { db = null; }
+    const uid = user ? await user.id().catch(() => null) : null;
+    if (!db || !uid) { goLocal(); return; }
+    store.db = db;
+    store.col = db.collection('data/users/' + uid);
+    setStatus('불러오는 중…', 'busy');
+    const slow = setTimeout(() => { if (!store.ready) setStatus('서버 응답을 기다리는 중…', 'warn'); }, 10000);
+    store.unsub = store.col.onSnapshot((snap) => {
+      if (snap.metadata.fromCache && !store.ready) return; // 확정된 데이터를 기다림
+      clearTimeout(slow);
+      if (store.dirty || store.flushing || snap.metadata.hasPendingWrites) return; // 내 변경이 더 최신
+      const docs = {};
+      snap.docs.forEach((d) => { const v = d.data(); if (v) docs[d.id] = JSON.parse(JSON.stringify(v)); });
+      store.synced = {};
+      Object.keys(docs).forEach((k) => { store.synced[k] = JSON.stringify(docs[k]); });
+      const next = fromDocs(docs);
+      const first = !store.ready;
+      store.mode = 'cloud'; store.ready = true;
+      if (first || JSON.stringify(toDocs(next)) !== JSON.stringify(toDocs(state))) {
+        state = next; cache = null;
+        if (first && view.editId) resetForm();
+        setType(view.type); fillSelect($('fMethod'), state.settings.methods); render();
+      }
+      if (!store.readOnly) setStatus('계정에 저장됨', 'ok');
+    }, (err) => {
+      clearTimeout(slow);
+      console.error(err);
+      if (!store.ready) goLocal('계정 저장소에 연결하지 못해 이 브라우저에만 저장해요.');
+      else setStatus('연결 끊김 · 새로고침 필요', 'warn');
+    });
+  }
+  function ensureReady() {
+    if (store.ready) return true;
+    toast('가계부를 불러오는 중이에요. 잠시만요.');
+    return false;
   }
 
   /* ---------- 거래내역 시트 (엑셀과 같은 행 순서: 날짜 오름차순) ---------- */
@@ -266,6 +377,7 @@
   }
 
   function saveFormula() {
+    if (!ensureReady()) return;
     let src = $('fxInput').value.trim();
     if (!src) { $('fxInput').focus(); return; }
     if (!src.startsWith('=')) src = '=' + src;
@@ -334,6 +446,7 @@
   }
   function submitEntry(e) {
     e.preventDefault();
+    if (!ensureReady()) return;
     const date = $('fDate').value;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { toast('날짜를 입력하세요'); $('fDate').focus(); return; }
     const a = parseAmount($('fAmount').value);
@@ -401,7 +514,7 @@
     $('settingsDlg').showModal();
   }
   function closeSettings() {
-    if ($('settingsDlg').returnValue !== 'save') return;
+    if ($('settingsDlg').returnValue !== 'save' || !ensureReady()) return;
     const b = parseAmount($('sBudget').value || '0');
     state.settings = {
       budget: b.error ? 0 : Math.max(0, b.amount),
@@ -415,6 +528,7 @@
     toast('설정을 저장했어요');
   }
   async function resetAll() {
+    if (!ensureReady()) return;
     $('settingsDlg').close('');
     const ok = await choose('모든 데이터 삭제', `거래내역 ${state.tx.length}건과 저장한 수식, 설정이 모두 지워집니다. 먼저 엑셀로 내보내 두는 것을 권장해요.`,
       [{ value: '', label: '취소', cls: 'ghost' }, { value: 'yes', label: '모두 삭제', cls: 'danger' }]);
@@ -428,13 +542,24 @@
   }
 
   /* ---------- 내보내기 ---------- */
-  function download(blob, name) {
+  async function download(blob, name) {
+    const dl = hasClaude ? await window.claude.use('downloads').catch(() => null) : null;
+    if (dl) {
+      try { await dl.save({ filename: name, data: blob }); return true; }
+      catch (e) {
+        if (e && e.code === 'declined') return false;
+        if (e && e.code === 'rate_limited') { toast('저장 창이 이미 열려 있어요. 잠시 후 다시 눌러 주세요.'); return false; }
+        toast('이 화면에서는 파일을 저장할 수 없어요.');
+        return false;
+      }
+    }
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
     a.download = name;
     document.body.appendChild(a);
     a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    return true;
   }
   const stamp = () => todayIso().replace(/-/g, '');
 
@@ -524,17 +649,16 @@
   async function exportXlsx() {
     try {
       const blob = await X.writeXlsx(buildWorkbook());
-      download(blob, `가계부_${stamp()}.xlsx`);
-      toast('엑셀 파일을 만들었어요');
+      if (await download(blob, `가계부_${stamp()}.xlsx`)) toast('엑셀 파일을 저장했어요');
     } catch (e) {
       console.error(e);
       toast('내보내기 실패: ' + e.message);
     }
   }
-  function exportCsv() {
+  async function exportCsv() {
     const { rows } = sheet();
     const data = [HEAD, ...rows.map((t) => [t.date, t.type, t.cat, t.desc, t.amount, t.method, t.memo])];
-    download(new Blob([X.toCsv(data)], { type: 'text/csv;charset=utf-8' }), `가계부_거래내역_${stamp()}.csv`);
+    if (await download(new Blob([X.toCsv(data)], { type: 'text/csv;charset=utf-8' }), `가계부_거래내역_${stamp()}.csv`)) toast('CSV 파일을 저장했어요');
   }
 
   /* ---------- 가져오기 ---------- */
@@ -638,6 +762,7 @@
   const txKey = (t) => [t.date, t.type, t.cat, t.desc, t.amount, t.method, t.memo].join('\u0001');
 
   async function importFile(file) {
+    if (!ensureReady()) return;
     const buf = await file.arrayBuffer();
     const u8 = new Uint8Array(buf);
     const name = file.name.toLowerCase();
@@ -694,6 +819,7 @@
 
   /* ---------- 예시 데이터 ---------- */
   function loadSample() {
+    if (!ensureReady()) return;
     const cur = ymOf(todayIso()), prev = shiftYm(cur, -1);
     const today = new Date().getDate();
     const mk = (ym, d, type, cat, desc, amount, method, memo = '', formula = null) => ({ id: nextId(), date: `${ym}-${pad(d)}`, type, cat, desc, amount, method, memo, formula });
@@ -743,6 +869,7 @@
     $('txBody').onclick = async (e) => {
       const del = e.target.closest('[data-del]');
       if (del) {
+        if (!ensureReady()) return;
         const id = +del.dataset.del;
         const t = state.tx.find((x) => x.id === id);
         const ok = await choose('내역 삭제', `${t.date} ${t.desc || t.cat} ${won(t.amount)} 내역을 삭제할까요?`, [{ value: '', label: '취소', cls: 'ghost' }, { value: 'yes', label: '삭제', cls: 'danger' }]);
@@ -772,6 +899,7 @@
       if (!li) return;
       const x = state.formulas.find((f) => f.id === +li.dataset.fx);
       if (e.target.closest('[data-fxdel]')) {
+        if (!ensureReady()) return;
         state.formulas = state.formulas.filter((f) => f !== x);
         if (view.fxEditId === x.id) { view.fxEditId = null; $('fxSave').textContent = '저장'; }
         commit();
@@ -799,10 +927,13 @@
   }
 
   // 시작
+  let booted = false;
   bind();
   setType('지출');
   fillSelect($('fMethod'), state.settings.methods, state.settings.methods[0]);
   resetForm();
   render();
+  booted = true;
+  if (hasClaude) connectCloud(); else setStatus('이 브라우저에 저장', '');
   window.__gagyebu = { get state() { return state; }, buildWorkbook, importFile };
 })();
