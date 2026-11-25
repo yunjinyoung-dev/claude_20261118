@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>밸류 체커</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%23245fc4'/%3E%3Cpath d='M6 22 L12 15 L17 19 L26 9' stroke='white' stroke-width='3' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo" aria-hidden="true"></span><h1>밸류 체커</h1></div>
+    <form id="searchForm" class="search" autocomplete="off" role="search">
+      <input id="q" type="search" placeholder="종목코드·종목명·티커 (예: 069500, 삼성전자, SPY)" aria-label="종목 검색" aria-autocomplete="list" aria-controls="suggest">
+      <button class="btn primary" type="submit">분석</button>
+      <ul id="suggest" class="suggest" role="listbox" hidden></ul>
+    </form>
+  </header>
+
+  <main>
+    <div id="recent" class="recent" aria-label="최근 본 종목"></div>
+
+    <section id="empty" class="empty">
+      <h2>어떤 종목을 볼까요?</h2>
+      <p>종목을 입력하면 최근 가격이 평균에서 <b>표준편차 몇 개만큼</b> 떨어져 있는지로 저평가·고평가를 판단하고, 분할 매수에 참고할 가격대를 계산해요.</p>
+      <div class="examples" id="examples">
+        <button type="button" data-q="069500" data-n="KOR">KODEX 200</button>
+        <button type="button" data-q="005930" data-n="KOR">삼성전자</button>
+        <button type="button" data-q="360750" data-n="KOR">TIGER 미국S&amp;P500</button>
+        <button type="button" data-q="SPY" data-n="USA">SPY</button>
+        <button type="button" data-q="QQQ" data-n="USA">QQQ</button>
+        <button type="button" data-q="AAPL" data-n="USA">AAPL</button>
+      </div>
+    </section>
+
+    <div id="loading" class="loading" hidden>시세를 불러오는 중…</div>
+    <div id="error" class="error" role="alert" hidden></div>
+
+    <div id="result" hidden>
+      <section class="card quote">
+        <div class="q-left">
+          <div class="q-name"><h2 id="name"></h2><span id="badges"></span></div>
+          <div class="q-meta" id="meta"></div>
+        </div>
+        <div class="q-right">
+          <div class="q-price" id="price"></div>
+          <div class="q-change" id="change"></div>
+        </div>
+        <div class="q-status">
+          <span id="status"></span>
+          <label class="toggle"><input type="checkbox" id="auto" checked> 30초마다 자동 갱신</label>
+          <button type="button" class="btn small ghost" id="refresh">지금 갱신</button>
+        </div>
+      </section>
+
+      <div class="grid">
+        <section class="card verdict">
+          <div class="card-head">
+            <h3>평가</h3>
+            <label class="period">비교 기간
+              <select id="period">
+                <option value="60">3개월 (60거래일)</option>
+                <option value="120">6개월 (120거래일)</option>
+                <option value="250" selected>1년 (250거래일)</option>
+                <option value="500">2년 (500거래일)</option>
+              </select>
+            </label>
+          </div>
+          <div class="v-main">
+            <span class="zone-pill" id="zonePill"></span>
+            <span class="z-value" id="zValue"></span>
+          </div>
+          <p class="v-text" id="vText"></p>
+          <div class="gauge" id="gauge" aria-hidden="true">
+            <div class="g-track">
+              <span class="g-seg deep-under"></span><span class="g-seg under"></span><span class="g-seg fair"></span><span class="g-seg over"></span><span class="g-seg deep-over"></span>
+            </div>
+            <span class="g-marker" id="gMarker"></span>
+            <div class="g-ticks"><span>−3σ</span><span>−2σ</span><span>−1σ</span><span>평균</span><span>+1σ</span><span>+2σ</span><span>+3σ</span></div>
+          </div>
+          <dl class="facts" id="facts"></dl>
+          <div id="extraNote" class="extra-note"></div>
+        </section>
+
+        <section class="card levels">
+          <div class="card-head"><h3>가격대별 참고 가격</h3><span class="muted small" id="levelsPeriod"></span></div>
+          <div class="table-wrap">
+            <table class="tbl" id="levelsTbl">
+              <thead><tr><th>구간</th><th class="num">가격</th><th class="num"><span class="long">현재가 </span>대비</th><th class="num" title="같은 기간 길이로 과거를 굴려 계산했을 때 이 구간에 있었던 날의 비율">과거 빈도</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="muted small">매수 참고 가격은 호가 단위로 내림했어요. <b>과거 빈도</b>는 지난 기록에서 가격이 그 구간 바깥(아래 또는 위)에 있었던 날의 비율이에요. 낮을수록 드물게 오는 가격이에요.</p>
+        </section>
+      </div>
+
+      <section class="card chart-card">
+        <div class="card-head">
+          <h3>가격과 표준편차 밴드</h3>
+          <div class="legend" id="legend">
+            <span><i class="lk price"></i>종가</span>
+            <span><i class="lk sma"></i>이동평균</span>
+            <span><i class="lk b1"></i>±1σ</span>
+            <span><i class="lk b2"></i>±2σ</span>
+          </div>
+        </div>
+        <div class="chart" id="chart"></div>
+      </section>
+
+      <div class="grid">
+        <section class="card">
+          <div class="card-head"><h3>변동성으로 본 하락 시나리오</h3><span class="muted small" id="volNote"></span></div>
+          <div class="table-wrap">
+            <table class="tbl" id="scenTbl">
+              <thead><tr><th>기간</th><th class="num">보통 범위 하단 (−1σ)</th><th class="num">큰 하락 (−2σ)</th><th class="num">보통 범위 상단 (+1σ)</th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <p class="muted small">최근 일간 수익률의 표준편차로 계산했어요. 해당 기간 동안 약 68%의 경우 −1σ~+1σ 사이, 약 95%의 경우 −2σ 위에 머무는 것으로 가정한 값이에요(정규분포 가정).</p>
+        </section>
+
+        <section class="card" id="fundCard">
+          <div class="card-head"><h3 id="fundTitle">투자 지표</h3><span class="muted small" id="fundSrc"></span></div>
+          <dl class="facts cols" id="fund"></dl>
+          <p class="muted small" id="fundNote"></p>
+        </section>
+      </div>
+
+      <details class="card method">
+        <summary>어떻게 계산하나요?</summary>
+        <ol>
+          <li><b>이동평균과 표준편차:</b> 선택한 기간(예: 최근 250거래일)의 종가 평균과 표준편차(σ)를 구해요. 오늘 가격은 실시간 현재가를 써요.</li>
+          <li><b>평가(z):</b> (현재가 − 평균) ÷ σ. −1σ 이하면 저평가, −2σ 이하면 강한 저평가, +1σ 이상이면 고평가, +2σ 이상이면 강한 고평가로 봐요.</li>
+          <li><b>매수 참고 가격:</b> 평균 − 1σ, 1.5σ, 2σ, 2.5σ 가격이에요. 한 번에 사기보다 구간마다 나눠 사는 분할 매수에 참고하세요.</li>
+          <li><b>과거 빈도:</b> 같은 기간 길이로 과거 약 5년을 하루씩 굴려 계산한 z 값 중, 그 구간을 넘어선 날의 비율이에요.</li>
+          <li><b>한계:</b> 가격이 평균으로 돌아온다는 가정(평균회귀)에 기반해요. 실적 악화나 시장 급락처럼 추세가 바뀌면 −2σ 아래로 계속 내려갈 수 있어요. PER·목표가 같은 지표와 함께 보세요.</li>
+        </ol>
+      </details>
+    </div>
+
+    <p class="disclaimer">통계적 참고 자료이며 투자 권유가 아닙니다. 시세는 네이버 금융·야후 파이낸스에서 가져오며 지연되거나 틀릴 수 있어요. 투자 판단과 책임은 본인에게 있습니다.</p>
+  </main>
+
+  <div class="tip" id="tip" role="status" hidden></div>
+
+  <script src="stats.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
