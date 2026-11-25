@@ -54,8 +54,8 @@
       st.data = data;
       $('q').value = '';
       addRecent(data.item);
-      const hash = '#' + encodeURIComponent(data.item.code) + (data.item.nation === 'USA' ? '.US' : '');
-      if (location.hash !== hash) history.replaceState(null, '', hash);
+      const hash = '#' + encodeURIComponent(data.item.code) + (data.item.nation === 'USA' ? '-US' : '');
+      try { if (location.hash !== hash) history.replaceState(null, '', hash); } catch (e) { /* 주소 갱신이 막힌 환경 */ }
       document.title = `${data.item.name} · 밸류 체커`;
       $('result').hidden = false;
       render();
@@ -410,7 +410,7 @@
   function loadFromHash() {
     const h = decodeURIComponent(location.hash.slice(1));
     if (!h) return;
-    const us = h.endsWith('.US'), code = us ? h.slice(0, -3) : h;
+    const us = /[.-]US$/.test(h), code = us ? h.slice(0, -3) : h;
     if (st.data && st.data.item.code === code) return;
     load(code, us ? 'USA' : 'KOR');
   }
